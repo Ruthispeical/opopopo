@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Angry Birds - Direct Load</title>
+    <style>
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
+        iframe { width: 100%; height: 100%; border: none; }
+        #status { color: white; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-family: sans-serif; }
+    </style>
+</head>
+<body>
+
+    <div id="status">Loading Game...</div>
+    <iframe id="game-frame"></iframe>
+
+    <script>
+        async function launchDirectly() {
+            // The RAW URL
+            const url = "https://raw.githubusercontent.com/CoolDude2349/Offline-HTML-Games-Pack/master/offline/angrybirdsshowdown.html";
+            
+            try {
+                const response = await fetch(url);
+                if (!response.ok) throw new Error('Network response was not ok');
+                
+                const code = await response.text();
+                
+                // Convert the text into an HTML Blob
+                const blob = new Blob([code], { type: 'text/html' });
+                const blobUrl = URL.createObjectURL(blob);
+                
+                // Set the iframe source to our internal blob URL
+                const frame = document.getElementById('game-frame');
+                frame.src = blobUrl;
+                
+                // Hide the loading message once the frame starts loading
+                frame.onload = () => {
+                    document.getElementById('status').style.display = 'none';
+                };
+
+            } catch (err) {
+                document.getElementById('status').innerText = "Error: Could not fetch game code.";
+                console.error(err);
+            }
+        }
+
+        launchDirectly();
+    </script>
+
+</body>
+</html>
