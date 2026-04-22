@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Block Breaker Pro</title>
+    <style>
+        body { margin: 0; background-color: #222; display: flex; justify-content: center; align-items: center; height: 100vh; color: white; font-family: Arial, sans-serif; }
+        canvas { border: 4px solid #fff; background-color: #000; display: block; }
+        #gameContainer { position: relative; }
+        #ui { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; background-color: rgba(0,0,0,0.85); display: none; }
+        button { padding: 10px 20px; font-size: 20px; cursor: pointer; background: #4CAF50; border: none; color: white; border-radius: 5px; margin-top: 15px;}
+    </style>
+</head>
+<body>
+
+<div id="gameContainer">
+    <canvas id="gameCanvas" width="480" height="520"></canvas>
+    <div id="ui">
+        <h1 id="uiTitle">BLOCK BREAKER</h1>
+        <p id="uiMessage">Press Start</p>
+        <button onclick="startGame()">START</button>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+    const ui = document.getElementById("ui");
+    const uiTitle = document.getElementById("uiTitle");
+    const uiMessage = document.getElementById("uiMessage");
+
+    // Game Constants
+    const PADDLE_WIDTH_START = 80;
+    const PADDLE_HEIGHT = 12;
+    const BALL_RADIUS = 7;
+    const BRICK_ROWS = 6;
+    const BRICK_COLS = 7;
+    const BRICK_WIDTH = 55;
+    const BRICK_HEIGHT = 15;
+    const BRICK_PADDING = 8;
+    const BRICK_OFFSET_TOP = 40;
+    const BRICK_OFFSET_LEFT = 20;
+
+    // Game State
+    let paddleWidth = PADDLE_WIDTH_START;
+    let paddleX = (canvas.width - paddleWidth) / 2;
+    let ballX, ballY, dx, dy;
+    let balls = [];
+    let bricks = [];
+    let score = 0;
+    let lives = 3;
+    let level = 1;
+    let maxLevel = 10;
+    let powerUps = [];
+    let rightPressed = false;
+    let leftPressed = false;
+    let gameRunning = false;
+    let powerBallActive = false;
+
+    // Level Generator (Simple 10 level progression)
+    function initLevel() {
+        bricks = [];
+        for (let c = 0; c < BRICK_COLS; c++) {
+            bricks[c] = [];
+            for (let r = 0; r < BRICK_ROWS; r++) {
+                // Randomize brick types: 0=normal, 1=powerup
+                let type = Math.random() < 0.2 ? 1 : 0; // 20% chance for powerup brick
+                let health = (r < 2) ? 2 : 1; // Top 2 rows stronger
+                if (level > 5) health++; // Higher levels harder
+                bricks[c][r] = { x: 0, y: 0, status: 1, type: type, health: health };
+            }
+        }
+        resetBall();
+        paddleWidth = PADDLE_WIDTH_START;
+    }
+
+    function resetBall() {
+        balls = [{ x: canvas.width / 2, y: canvas.height - 30, dx: 3 * (Math.random() > 0.5 ? 1 : -1), dy: -3 }];
+        paddleX = (canvas.width - paddleWidth) / 2;
+        powerBallActive = false;
+    }
+
+    // Input Handling
+    document.addEventListener("keydown", keyDownHandler);
+    document.addEventListener("keyup", keyUpHandler);
+    document.addEventListener("mousemove", mouseMoveHandler);
+
+    function keyDownHandler(e) {
+        if (e.key === "Right" || e.key === "ArrowRight" || e.key === "d" || e.key === "D") rightPressed = true;
+        else if (e.key === "Left" || e.key === "ArrowLeft" || e.key === "a" || e.key === "A") leftPressed = true;
+    }
+    function keyUpHandler(e) {
+        if (e.key === "Right" || e.key === "ArrowRight" || e.key === "d" || e.key === "D") rightPressed = false;
+        else if (e.key === "Left" || e.key === "ArrowLeft" || e.key === "a" || e.key === "A") leftPressed = false;
+    }
+    function mouseMoveHandler(e) {
+        let relativeX = e.clientX - canvas.offsetLeft;
+        if (relativeX > 0 && relativeX < canvas.width) paddleX = relativeX - paddleWidth / 2;
+    }
+
+    // Collision Detection
+    function collisionDetection() {
+        for (let c = 0; c < BRICK_COLS; c++) {
+            for (let r = 0; r < BRICK_ROWS; r++) {
+                let b = bricks[c][r];
+                if (b.status > 0) {
+                    balls.forEach(ball => {
+                        if (ball.x > b.x && ball.x < b.x + BRICK_WIDTH && ball.y > b.y && ball.y < b.y + BRICK_HEIGHT) {
+                            if (!powerBallActive) ball.dy = -ball.dy;
+                            b.health--;
+                            if (b.health <= 0) {
+                                b.status = 0;
+                                score += 10;
+                                if (b.type === 1) spawnPowerUp(b.x, b.y);
+                            }
+                        }
+                    });
+                }
+            }
+        }
+    }
+
+    function spawnPowerUp(x, y) {
+        const types = ['ball', 'paddle', 'slow', 'power'];
+        powerUps.push({
+            x: x, y: y,
+            type: types[Math.floor(Math.random() * types.length)],
+            dy: 2
+        });
+    }
+
+    function applyPowerUp(type) {
+        if (type === 'ball') balls.push({ x: balls[0].x, y: balls[0].y, dx: -2, dy: -3 });
+        if (type === 'paddle') paddleWidth += 20;
+        if (type === 'slow') balls.forEach(b => { b.dx *= 0.8; b.dy *= 0.8; });
+        if (type === 'power') powerBallActive = true;
+    }
+
+    // Drawing
+    function drawBall(ball) {
+        ctx.beginPath();
+        ctx.arc(ball.x, ball.y, BALL_RADIUS, 0, Math.PI * 2);
+        ctx.fillStyle = powerBallActive ? "#FFD700" : "#fff";
+        ctx.fill();
+        ctx.closePath();
+    }
+    function drawPaddle() {
+        ctx.beginPath();
+        ctx.rect(paddleX, canvas.height - PADDLE_HEIGHT - 5, paddleWidth, PADDLE_HEIGHT);
+        ctx.fillStyle = "#0095DD";
+        ctx.fill();
+        ctx.closePath();
+    }
+    function drawBricks() {
+        for (let c = 0; c < BRICK_COLS; c++) {
+            for (let r = 0; r < BRICK_ROWS; r++) {
+                if (bricks[c][r].status > 0) {
+                    let brickX = (c * (BRICK_WIDTH + BRICK_PADDING)) + BRICK_OFFSET_LEFT;
+                    let brickY = (r * (BRICK_HEIGHT + BRICK_PADDING)) + BRICK_OFFSET_TOP;
+                    bricks[c][r].x = brickX;
+                    bricks[c][r].y = brickY;
+                    ctx.beginPath();
+                    ctx.rect(brickX, brickY, BRICK_WIDTH, BRICK_HEIGHT);
+                    ctx.fillStyle = bricks[c][r].type === 1 ? "#FF4500" : (r % 2 === 0 ? "#00ff88" : "#00aaff");
+                    ctx.fill();
+                    ctx.closePath();
+                }
+            }
+        }
+    }
+    function drawScore() {
+        ctx.font = "16px Arial";
+        ctx.fillStyle = "#fff";
+        ctx.fillText("Score: " + score + " | Lives: " + lives + " | Level: " + level, 8, 20);
+    }
+
+    function drawPowerUps() {
+        powerUps.forEach((p, i) => {
+            p.y += p.dy;
+            ctx.fillStyle = "white";
+            ctx.fillRect(p.x, p.y, 15, 15);
+            
+            // Catch powerup
+            if (p.y > canvas.height - PADDLE_HEIGHT - 10 && p.x > paddleX && p.x < paddleX + paddleWidth) {
+                applyPowerUp(p.type);
+                powerUps.splice(i, 1);
+            } else if (p.y > canvas.height) powerUps.splice(i, 1);
+        });
+    }
+
+    // Main Game Loop
+    function draw() {
+        if (!gameRunning) return;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        drawBricks();
+        drawPaddle();
+        drawScore();
+        drawPowerUps();
+        balls.forEach(drawBall);
+        collisionDetection();
+
+        // Move balls
+        balls.forEach((ball, i) => {
+            ball.x += ball.dx;
+            ball.y += ball.dy;
+
+            // Wall collision
+            if (ball.x + ball.dx > canvas.width - BALL_RADIUS || ball.x + ball.dx < BALL_RADIUS) ball.dx = -ball.dx;
+            if (ball.y + ball.dy < BALL_RADIUS) ball.dy = -ball.dy;
+            
+            // Paddle collision
+            if (ball.y + ball.dy > canvas.height - BALL_RADIUS - PADDLE_HEIGHT - 5) {
+                if (ball.x > paddleX && ball.x < paddleX + paddleWidth) {
+                    ball.dy = -Math.abs(ball.dy);
+                } else if (ball.y + ball.dy > canvas.height - BALL_RADIUS) {
+                    balls.splice(i, 1);
+                    if (balls.length === 0) {
+                        lives--;
+                        if (lives <= 0) gameOver();
+                        else resetBall();
+                    }
+                }
+            }
+        });
+
+        // Paddle movement
+        if (rightPressed && paddleX < canvas.width - paddleWidth) paddleX += 7;
+        else if (leftPressed && paddleX > 0) paddleX -= 7;
+
+        // Level clear
+        if (bricks.flat().every(b => b.status === 0)) {
+            level++;
+            if (level > maxLevel) {
+                gameOver(true);
+            } else {
+                initLevel();
+            }
+        }
+
+        requestAnimationFrame(draw);
+    }
+
+    // UI Controls
+    function startGame() {
+        score = 0; lives = 3; level = 1; paddleWidth = PADDLE_WIDTH_START;
+        initLevel();
+        gameRunning = true;
+        ui.style.display = "none";
+        draw();
+    }
+
+    function gameOver(win = false) {
+        gameRunning = false;
+        ui.style.display = "flex";
+        uiTitle.innerText = win ? "YOU WIN!" : "GAME OVER";
+        uiMessage.innerText = "Final Score: " + score + " | Level: " + level;
+    }
+
+    // Start screen
+    ui.style.display = "flex";
+
+</script>
+</body>
+</html>
