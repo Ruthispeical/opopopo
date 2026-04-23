@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Powder Simulatord</title>
+<style>
+  body {
+    margin: 0;
+    background: #222;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  #toolbar {
+    display: flex;
+    background: #333;
+    padding: 5px;
+    gap: 8px;
+    flex-wrap: wrap;
+    max-width: 90vw;
+  }
+  .tool {
+    padding: 6px 10px;
+    background: #555;
+    color: white;
+    cursor: pointer;
+    border-radius: 4px;
+    font-family: sans-serif;
+    user-select: none;
+    text-transform: capitalize;
+  }
+  .tool.active { background: #888; }
+  canvas {
+    background: black;
+    image-rendering: pixelated;
+    margin-top: 8px;
+  }
+  #resetBtn {
+    margin-top: 8px;
+    padding: 6px 14px;
+    background: #444;
+    color: white;
+    border-radius: 4px;
+    font-family: sans-serif;
+    cursor: pointer;
+    user-select: none;
+  }
+  #resetBtn:hover { background: #666; }
+</style>
+</head>
+<body>
+<div id="toolbar"></div>
+<canvas id="game"></canvas>
+<div id="resetBtn">Reset</div>
+
+<script>
+// CONFIG
+const WIDTH = 250, HEIGHT = 100, SCALE = 4.2;
+
+// CANVAS
+const canvas = document.getElementById("game");
+canvas.width = WIDTH * SCALE;
+canvas.height = HEIGHT * SCALE;
+const ctx = canvas.getContext("2d");
+
+// INPUT
+let mouse = { x: 0, y: 0, down: false };
+canvas.addEventListener("mousedown", e => { mouse.down = true; updateMousePos(e); });
+canvas.addEventListener("mouseup", () => mouse.down = false);
+canvas.addEventListener("mousemove", updateMousePos);
+function updateMousePos(e) {
+  const rect = canvas.getBoundingClientRect();
+  mouse.x = Math.floor((e.clientX - rect.left) / SCALE);
+  mouse.y = Math.floor((e.clientY - rect.top) / SCALE);
+}
+
+// GRID helpers
+function createCell(type="air") { return { type, burnTimer:0, burning:false, lavaSpread:false, timer:0 }; }
+let grid = Array.from({length:HEIGHT}, ()=>Array.from({length:WIDTH}, ()=>createCell()));
+function setCell(x,y,type){ if(x<0||y<0||x>=WIDTH||y>=HEIGHT) return; grid[y][x]=createCell(type); grid[y][x].type = type; }
+function swap(x1,y1,x2,y2){ const tmp=grid[y1][x1]; grid[y1][x1]=grid[y2][x2]; grid[y2][x2]=tmp; }
+
+// RESET
+document.getElementById("resetBtn").onclick = () => {
+  grid = Array.from({length:HEIGHT}, ()=>Array.from({length:WIDTH}, ()=>createCell()));
+};
+
+// BOUNDS
+function inBounds(x,y){ return x>=0 && y>=0 && x<WIDTH && y<HEIGHT; }
+
+// HELPERS
+function tryMove(x,y,dx,dy,valid=["air"]){
+  const nx=x+dx, ny=y+dy;
+  if(!inBounds(nx,ny)) return false;
+  if(valid.includes(grid[ny][nx].type)){ swap(x,y,nx,ny); return true; }
+  return false;
+}
+
+// Centralized ignition logic
+function igniteCell(x,y,source){
+  if(!inBounds(x,y)) return;
+  const c = grid[y][x];
+  const mat = MATERIALS[c.type];
+  if(!mat) return;
+
+  // If material isn't flammable, nothing to do
+  if(!mat.flammable) return;
+
+  // If source is lava and material is oil => immediate conversion to fire
+  if(source === "lava" && c.type === "oil"){
+    setCell(x,y,"fire");
+    return;
+  }
+
+  // If source is lava, mark it as lavaSpread (some materials treat lava specially)
+  if(source === "lava"){
+    // If not already flagged, mark lavaSpread and give a small burn timer
+    if(!c.lavaSpread){
+      c.lavaSpread = true;
+      c.burnTimer = 10 + Math.floor(Math.random()*20);
+    }
+    return;
+  }
+
+  // If source is fire, start burning (generic)
+  if(source === "fire"){
+    if(!c.burning){
+      c.burning = true;
+      c.burnTimer = 20 + Math.floor(Math.random()*60);
+    }
+  }
+}
+
+// BEHAVIORS
+function fallLikeSand(x,y){
+  if(tryMove(x,y,0,1)) return;
+  if(tryMove(x,y,-1,1)) return;
+  if(tryMove(x,y,1,1)) return;
+}
+function fallLikeSolid(x,y,sinksInto=[]){
+  if(!inBounds(x,y)) return;
+  if(tryMove(x,y,0,1)) return;
+  if(inBounds(x,y+1) && sinksInto.includes(grid[y+1][x].type)) tryMove(x,y,0,1,sinksInto);
+}
+function flowLikeLiquid(x,y){
+  if(tryMove(x,y,0,1)) return;
+  const dir=Math.random()<0.5?-1:1;
+  tryMove(x,y,dir,0);
+}
+
+// MATERIALS
+const MATERIALS = {
+  air:{color:"#000", flammable:false, update:()=>{}},
+
+hail: {
+  color: "#b8e6ff",
+  flammable: false,
+  update(x, y) {
+    if (!inBounds(x, y)) return;
+
+    // 1. Drift BEFORE falling, sometimes
+    if (Math.random() < 0.35) { // 35% chance to drift each frame
+      const dir = Math.random() < 0.5 ? -1 : 1;
+      if (tryMove(x, y, dir, 0)) return;
+    }
+
+    // 2. Fall fast but with a bit of scatter
+    if (tryMove(x, y, 0, 1)) return;
+    if (Math.random() < 0.3) { // sideways fall chance to help spread
+      if (tryMove(x, y, -1, 1)) return;
+      if (tryMove(x, y, 1, 1)) return;
+    }
+
+    // 3. If it cannot fall anymore, it landed on something
+    //    Hail pellets crack / melt on impact
+    if (Math.random() < 0.5) {
+      setCell(x, y, "ice");
+    } else {
+      setCell(x, y, "air");
+    }
+  }
+},
+
+
+flint: {
+  color: "#333",
+  flammable: false,
+  update: (x, y) => {
+    if (!inBounds(x, y)) return;
+    const cell = grid[y][x];
+
+    // FALL LIKE SAND
+    if (tryMove(x, y, 0, 1)) {
+      grid[y+1][x].justMoved = true;
+      return;
+    }
+    if (tryMove(x, y, -1, 1)) return;
+    if (tryMove(x, y, 1, 1)) return;
+
+    // SPARK WHEN LANDING
+    if (cell.justMoved) {
+      cell.justMoved = false;
+      if (Math.random() < 0.15) {
+        if (inBounds(x, y-1) && grid[y-1][x].type === "air") {
+          setCell(x, y-1, "fire");
+          grid[y-1][x].timer = 10 + Math.floor(Math.random() * 10);
+        }
+      }
+    }
+
+    // HEAT UP WHEN TOUCHING LAVA (slow burn)
+    for (const [dx, dy] of [[0,1],[0,-1],[1,0],[-1,0]]) {
+      const nx = x + dx, ny = y + dy;
+      if (!inBounds(nx, ny)) continue;
+      const n = grid[ny][nx];
+
+      if (n.type === "lava") {
+        // start or continue heating
+        cell.heat = (cell.heat || 0) + 1;
+
+        // after heating long enough, flint dissolves
+        if (cell.heat > 10) { // ~1 second at 60fps
+          setCell(x, y, "lava");
+        }
+
+        return; // only count 1 adjacent lava
+      }
+    }
+
+    // If not touching lava, slowly cool back down
+    if (cell.heat) {
+      cell.heat = Math.max(0, cell.heat - 0.5);
+    }
+  }
+},
+
+
+snowflake: {
+  color: "#fff",
+  flammable: false,
+  update: (x, y) => {
+    if (!inBounds(x, y)) return;
+    const cell = grid[y][x];
+
+    // Fall slower: only try to move down sometimes
+    if (Math.random() < 0.3) { // 30% chance to move down per frame
+      if (!tryMove(x, y, 0, 1)) { // can't move down
+        // 30% chance to turn into snow when hitting ground/solid
+        if (Math.random() < 0.3) setCell(x, y, "snow");
+      }
+    }
+
+    // Spread out: drift left/right
+    const driftDir = Math.random() < 0.5 ? -1 : 1;
+    if (Math.random() < 0.4) tryMove(x, y, driftDir, 0); // 40% chance to drift
+  }
+},
+
+
+gunpowder: {
+  color: "#555555",
+  flammable: true, // ignites from fire
+  update: (x, y) => {
+    if(!inBounds(x,y)) return;
+    const cell = grid[y][x];
+
+    // Explode immediately if touching lava
+    for (let [dx, dy] of [[0,1],[0,-1],[1,0],[-1,0]]) {
+      const nx = x+dx, ny = y+dy;
+      if(!inBounds(nx, ny)) continue;
+      if(grid[ny][nx].type === "lava"){
+        cell.burning = true;
+        cell.burnTimer = 1; // explodes next tick
+      }
+    }
+
+    // If gunpowder is burning, countdown to explosion
+    if(cell.burning){
+      cell.burnTimer--;
+      if(cell.burnTimer <= 0){
+        // Explode: destroy nearby materials except acid, water, lava, metal, oil
+for(let dy=-6; dy<=6; dy++){
+  for(let dx=-6; dx<=6; dx++){
+            const nx = x+dx, ny = y+dy;
+            if(!inBounds(nx,ny)) continue;
+            const target = grid[ny][nx];
+            if(!["acid","metal"].includes(target.type)){
+              setCell(nx, ny, "fire");
+            }
+            // Chain reaction: ignite nearby gunpowder
+            if(target.type === "gunpowder" && !target.burning){
+              target.burning = true;
+              target.burnTimer = 5 + Math.floor(Math.random()*3); // short delay
+            }
+          }
+        }
+        // Remove self
+        setCell(x,y,"air");
+        return;
+      }
+    }
+
+    // Check neighbors for fire to start burning
+    for(let [dx, dy] of [[0,1],[0,-1],[1,0],[-1,0]]){
+      const nx = x+dx, ny = y+dy;
+      if(!inBounds(nx,ny)) continue;
+      const t = grid[ny][nx].type;
+      if(t === "fire" && !cell.burning){
+        cell.burning = true;
+        cell.burnTimer = 5 + Math.floor(Math.random()*3); // short delay before explosion
+      }
+    }
+
+    // Gunpowder falls like sand
+    fallLikeSand(x, y);
+  }
+},
+
+
+coal: {
+  color: "#222",
+  flammable: false,
+  update: (x, y) => {
+    if(!inBounds(x,y)) return;
+
+    // Fall like stone
+    fallLikeSolid(x, y, ["water","oil","lava"]);
+
+    // Check neighbors
+    for (let [dx, dy] of [[0,1],[0,-1],[1,0],[-1,0]]) {
+      const nx = x+dx, ny = y+dy;
+      if(!inBounds(nx,ny)) continue;
+      const neighbor = grid[ny][nx];
+
+      // Fire above coal: spawn fire puff
+      const aboveY = y-1;
+      if(neighbor.type === "fire" && aboveY >= 0 && grid[aboveY][x].type === "air") {
+        const fireCell = createCell("fire");
+        fireCell.timer = 60 + Math.floor(Math.random() * 600);
+        fireCell.fromCoal = true;
+        fireCell.coalX = x;
+        fireCell.coalY = y;
+        grid[aboveY][x] = fireCell;
+      }
+
+      // Coal touching lava: chance to burn slowly (not instant!)
+      if(neighbor.type === "lava") {
+        if (Math.random() < 0.10) { // 2% chance per frame
+          setCell(x, y, "lava");
+        }
+        return;
+      }
+    }
+  }
+},
+
+
+snow: {
+  color: "#e8f6ff",
+  flammable: false,
+  update(x, y) {
+
+    // Move like sand
+    fallLikeSand(x, y);
+
+    // Check neighbors for fire (instant melt)
+    for (let [dx, dy] of [[0,1],[0,-1],[1,0],[-1,0]]) {
+      const nx = x+dx, ny = y+dy;
+      if (inBounds(nx, ny) && grid[ny][nx].type === "fire") {
+        setCell(x, y, "water");
+        return;
+      }
+    }
+
+    // Check 2-tile radius for lava (slow melt)
+    for (let dy = -2; dy <= 2; dy++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        const nx = x+dx, ny = y+dy;
+        if (!inBounds(nx, ny)) continue;
+        if (grid[ny][nx].type === "lava") {
+          if (Math.random() < 0.02) { // small melt chance
+            setCell(x, y, "water");
+            return;
+          }
+        }
+      }
+    }
+  }
+},
+
+
+ice: {
+  color: "#a6d8ff",
+  flammable: false,
+  update(x, y) {
+
+    // Fall like stone (stacks, doesn't slide sideways except into liquids)
+    fallLikeSolid(x, y, ["water","oil","lava"]);
+
+    const cell = grid[y][x];
+
+    // If touching fire: melt immediately
+    for (let [dx, dy] of [[0,1],[0,-1],[1,0],[-1,0]]) {
+      const nx = x+dx, ny = y+dy;
+      if (inBounds(nx, ny) && grid[ny][nx].type === "fire") {
+        setCell(x, y, "water");
+        return;
+      }
+    }
+
+    // If near lava within 2 pixels: slow melt chance
+    for (let dy = -2; dy <= 2; dy++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        const nx = x+dx, ny = y+dy;
+        if (!inBounds(nx, ny)) continue;
+        if (grid[ny][nx].type === "lava") {
+          if (Math.random() < 0.02) { // melt chance
+            setCell(x, y, "water");
+            return;
+          }
+        }
+      }
+    }
+  }
+},
+
+
+
+  wood: { color: "#8b5a2b", flammable: true, update: (x,y)=>{
+    if(!inBounds(x,y)) return;
+    const cell = grid[y][x];
+
+if (cell.burning) {
+  cell.burnTimer--;
+  if (cell.burnTimer <= 0) {
+    if (Math.random() < 0.8) setCell(x,y,"fire");
+    else setCell(x,y,"air");
+    return;
+  }
+}
+
+    // Check neighbors for fire or lava
+    for (let [dx, dy] of [[0,1],[0,-1],[1,0],[-1,0]]) {
+      const nx = x+dx, ny = y+dy;
+      if (!inBounds(nx, ny)) continue;
+      const t = grid[ny][nx].type;
+
+      if (t === "fire") {
+        // Start burning from fire
+        if(!cell.burning){ cell.burning = true; cell.burnTimer = 60 + Math.floor(Math.random()*60); }
+      }
+
+      if (t === "lava") {
+        // Wood touching lava: 50% → lava, 50% → air (keep previous behavior)
+        if (Math.random() < 0.5) setCell(x,y,"lava");
+        else setCell(x,y,"air");
+        return;
+      }
+    }
+
+    // wood falls like sand
+    fallLikeSand(x,y);
+  }},
+
+  ash:{color:"#555", flammable:true, update:(x,y)=>{
+    if(!inBounds(x,y)) return;
+    const c = grid[y][x];
+
+    // Longer lifetime (15–30 seconds)
+    if(!c.timer) c.timer = 900 + Math.floor(Math.random()*900);
+    c.timer--;
+    if(c.timer <= 0){
+      setCell(x,y,"air");
+      return;
+    }
+
+    // Remove if touching lava
+    if(
+      c.lavaSpread ||
+      [[0,1],[0,-1],[1,0],[-1,0]].some(([dx,dy]) =>
+        inBounds(x+dx,y+dy) && grid[y+dy][x+dx].type === "lava"
+      )
+    ){
+      setCell(x,y,"air");
+      return;
+    }
+
+    // Falls like sand
+    fallLikeSand(x,y);
+  }},
+
+  sand: {
+    color: "#C2B280",
+    flammable: true,
+    update: (x, y) => {
+      if(!inBounds(x,y)) return;
+      const cell = grid[y][x];
+
+if (cell.burning) {
+  cell.burnTimer--;
+  if (cell.burnTimer <= 0) {
+    if (Math.random() < 0.1) setCell(x,y,"fire");
+    else setCell(x,y,"air");
+    return;
+  }
+}
+
+
+      // Fire Spread + Ignition
+      for (let [dx, dy] of [[0,1],[0,-1],[1,0],[-1,0]]) {
+        const nx = x+dx, ny = y+dy;
+        if (!inBounds(nx, ny)) continue;
+        const t = grid[ny][nx].type;
+
+        if (t === "fire" && !cell.burning) {
+          // ignite via centralized function
+          igniteCell(x,y,"fire");
+        }
+
+        if (t === "lava") {
+          // Sand touching lava: 50% becomes lava, 50% disappears
+          if (Math.random() < 0.5) setCell(x,y,"lava");
+          else setCell(x,y,"air");
+          return;
+        }
+      }
+
+      fallLikeSand(x,y);
+    }
+  },
+
+  dirt: {
+    color: "saddlebrown",
+    flammable: true,
+    update: (x, y) => {
+      if(!inBounds(x,y)) return;
+      const cell = grid[y][x];
+
+if (cell.burning) {
+  cell.burnTimer--;
+  if (cell.burnTimer <= 0) {
+    if (Math.random() < 0.8) setCell(x,y,"fire");
+    else setCell(x,y,"air");
+    return;
+  }
+}
+
+      // Fire Spread + Lava effect
+      for (let [dx, dy] of [[0,1],[0,-1],[1,0],[-1,0]]) {
+        const nx = x+dx, ny = y+dy;
+        if (!inBounds(nx, ny)) continue;
+        const t = grid[ny][nx].type;
+
+        if (t === "fire" && !cell.burning) {
+          igniteCell(x,y,"fire");
+        }
+
+        if (t === "lava") {
+          if (Math.random() < 0.5) setCell(x,y,"lava");
+          else setCell(x,y,"air");
+          return;
+        }
+      }
+
+      fallLikeSand(x,y);
+    }
+  },
+
+  stone:{color:"gray", flammable:false, update:(x,y)=>{ fallLikeSolid(x,y,["water","oil","lava"]); }},
+  metal:{color:"silver", flammable:false, update:(x,y)=>{ fallLikeSolid(x,y,["water","oil","lava"]); }},
+
+  water:{color:"blue", flammable:false, update:(x,y)=>{
+    if(!inBounds(x,y)) return;
+    flowLikeLiquid(x,y);
+    [[0,1],[0,-1],[1,0],[-1,0]].forEach(([dx,dy])=>{
+      const nx=x+dx, ny=y+dy;
+      if(!inBounds(nx,ny)) return;
+      if(grid[ny][nx].type==="lava"){ setCell(nx,ny,"stone"); setCell(x,y,"steam"); }
+      if(grid[ny][nx].type==="fire"){ setCell(nx,ny,"steam"); }
+    });
+  }},
+  lava: {
+  color: "orange",
+  flammable: false,
+  update: (x,y) => {
+    if(!inBounds(x,y)) return;
+
+    [[0,1],[0,-1],[1,0],[-1,0]].forEach(([dx,dy]) => {
+      const nx = x+dx, ny = y+dy;
+      if(!inBounds(nx,ny)) return;
+      const n = grid[ny][nx];
+
+      // Lava touching water turns both to stone
+      if(n.type === "water"){
+        setCell(nx,ny,"stone");
+        setCell(x,y,"stone");
+        return;
+      }
+
+      // *** ADD THIS PART HERE ***
+      // Flint dissolves in lava
+
+      // *** END OF NEW CODE ***
+
+      // If neighbor is flammable, try to ignite it
+      if(MATERIALS[n.type] && MATERIALS[n.type].flammable){
+        igniteCell(nx,ny,"lava");
+      }
+    });
+
+    flowLikeLiquid(x,y);
+  }
+},
+  acid:{color:"lime", flammable:false, update:(x,y)=>{
+    if(!inBounds(x,y)) return;
+    [[0,1],[0,-1],[1,0],[-1,0]].forEach(([dx,dy])=>{
+      const nx=x+dx, ny=y+dy;
+      if(inBounds(nx,ny) && !["air","acid"].includes(grid[ny][nx].type)) setCell(nx,ny,"air");
+    });
+    flowLikeLiquid(x,y);
+  }},
+  oil:{color:"#4b2e2e", flammable:true, update:(x,y)=>{
+    if(!inBounds(x,y)) return;
+    flowLikeLiquid(x,y);
+    // If oil touches fire -> ignite (becomes fire)
+    [[0,1],[0,-1],[1,0],[-1,0]].forEach(([dx,dy])=>{
+      const nx=x+dx, ny=y+dy;
+      if(!inBounds(nx,ny)) return;
+      const t = grid[ny][nx].type;
+      if(t === "fire"){
+        // oil catches fire
+        setCell(x,y,"fire");
+      }
+      if(t === "lava"){
+        // oil touching lava should burn: convert oil -> fire
+        setCell(x,y,"fire");
+      }
+    });
+  }},
+fire: {
+  color:"red",
+  flammable:false,
+  update:(x,y)=>{
+    if(!inBounds(x,y)) return;
+    const cell = grid[y][x];
+
+    // Countdown timer
+    if(cell.timer) {
+      cell.timer--;
+      if(cell.timer <= 0){
+        setCell(x,y,"air");
+        return;
+      }
+    } else {
+      // Normal fire fading
+      if(Math.random()<0.05) setCell(x,y,"air");
+    }
+
+    // If this fire came from coal, check if coal still exists
+    if(cell.fromCoal){
+      if(!inBounds(cell.coalX, cell.coalY) || grid[cell.coalY][cell.coalX].type !== "coal"){
+        // Coal gone, stop being "fromCoal" — now behaves as normal fire
+        cell.fromCoal = false;
+      }
+    }
+
+    // Try to ignite neighbors
+    [[0,1],[0,-1],[1,0],[-1,0]].forEach(([dx,dy])=>{
+      igniteCell(x+dx,y+dy,"fire");
+    });
+  }
+},
+
+  steam:{color:"#aaa", flammable:false, update:(x,y)=>{
+    if(!inBounds(x,y)) return;
+    if(Math.random()<0.3) tryMove(x,y,0,-1);
+    else if(Math.random()<0.5) tryMove(x,y,Math.random()<0.5?-1:1,-1);
+    if(Math.random()<0.005) setCell(x,y,"air");
+  }},
+};
+
+// TOOLBAR
+let currentMaterial="sand";
+const toolbar=document.getElementById("toolbar");
+Object.keys(MATERIALS).forEach(name=>{
+  if(name==="air") return;
+  const btn=document.createElement("div");
+  btn.className="tool"+(name===currentMaterial?" active":"");
+  btn.textContent=name;
+  btn.onclick=()=>{ currentMaterial=name; document.querySelectorAll(".tool").forEach(b=>b.classList.remove("active")); btn.classList.add("active"); };
+  toolbar.appendChild(btn);
+});
+
+// MAIN LOOP
+function update(){
+  // place material only into empty cells (prevent overwriting)
+  if (mouse.down && inBounds(mouse.x, mouse.y)) {
+    const cell = grid[mouse.y][mouse.x];
+    if (cell.type === "air") {
+      setCell(mouse.x, mouse.y, currentMaterial);
+    }
+  }
+
+  // iterate bottom-up for gravity
+  for(let y=HEIGHT-1;y>=0;y--){
+    for(let x=0;x<WIDTH;x++){
+      const c = grid[y][x];
+      const mat = MATERIALS[c.type];
+      if(!mat) continue;
+      mat.update(x,y);
+    }
+  }
+}
+function draw(){
+  for(let y=0;y<HEIGHT;y++){
+    for(let x=0;x<WIDTH;x++){
+      const col = MATERIALS[grid[y][x].type]?.color || "#f0f";
+      ctx.fillStyle = col;
+      ctx.fillRect(x*SCALE,y*SCALE,SCALE,SCALE);
+    }
+  }
+}
+function loop(){ update(); draw(); requestAnimationFrame(loop); }
+loop();
+</script>
+</body>
+</html>
